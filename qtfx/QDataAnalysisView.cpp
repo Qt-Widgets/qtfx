@@ -2,24 +2,33 @@
 #include "QAction"
 #include "QHeaderView"
 #include <algorithm>
-#include "simvis/color.h"
-#include "xo/system/log_sink.h"
-#include "xo/utility/types.h"
-#include <set>
+#include "xo/utility/color.h"
+#include "xo/system/log.h"
+#include "xo/xo_types.h"
 #include "qtfx.h"
 #include <array>
 #include "xo/system/log.h"
+#include "xo/container/sorted_vector.h"
+#include "xo/numerical/constants.h"
+#include "qt_convert.h"
+#include "xo/numerical/compare.h"
+#include "xo/numerical/math.h"
+#include "xo/container/container_tools.h"
 
-QDataAnalysisView::QDataAnalysisView( QDataAnalysisModel* m, QWidget* parent ) : QWidget( parent ), model( m ), currentUpdateIdx( 0 )
+QDataAnalysisView::QDataAnalysisView( QDataAnalysisModel* m, QWidget* parent ) :
+	QWidget( parent ),
+	model( m ),
+	currentUpdateIdx( 0 )
 {
 	selectBox = new QCheckBox( this );
 	connect( selectBox, &QCheckBox::stateChanged, this, &QDataAnalysisView::select );
 
 	filter = new QLineEdit( this );
+	filter->setPlaceholderText( "Filter channels" );
 	connect( filter, &QLineEdit::textChanged, this, &QDataAnalysisView::filterChanged );
 
 	auto* header = new QHGroup( this, 0, 4 );
-	*header << new QLabel( "Filter", this ) << filter << selectBox;
+	*header << filter << selectBox;
 
 	itemList = new QTreeWidget( this );
 	itemList->setRootIsDecorated( false );
@@ -31,6 +40,7 @@ QDataAnalysisView::QDataAnalysisView( QDataAnalysisModel* m, QWidget* parent ) :
 	itemList->setHeaderLabels( headerLabels );
 
 	itemGroup = new QVGroup( this, 0, 4 );
+	itemGroup->setContentsMargins( 0, 0, 0, 0 );
 	*itemGroup << header << itemList;
 	connect( itemList, &QTreeWidget::itemChanged, this, &QDataAnalysisView::itemChanged );
 
@@ -40,9 +50,13 @@ QDataAnalysisView::QDataAnalysisView( QDataAnalysisModel* m, QWidget* parent ) :
 	splitter->addWidget( itemGroup );
 
 	QVBoxLayout* layout = new QVBoxLayout( this );
-	layout->setContentsMargins( 4, 4, 4, 4 );
+	setLayout( layout );
+	layout->setContentsMargins( 0, 0, 0, 0 );
 	layout->setSpacing( 4 );
 	layout->addWidget( splitter );
+
+	for ( int i = 0; i < maxSeriesCount; ++i )
+		freeColors.insert( i );
 
 #if !defined QTFX_NO_QCUSTOMPLOT
 	customPlot = new QCustomPlot();
@@ -61,7 +75,6 @@ QDataAnalysisView::QDataAnalysisView( QDataAnalysisModel* m, QWidget* parent ) :
 	connect( customPlot, &QCustomPlot::mousePress, this, &QDataAnalysisView::mouseEvent );
 	connect( customPlot, &QCustomPlot::mouseMove, this, &QDataAnalysisView::mouseEvent );
 	connect( customPlot->xAxis, SIGNAL( rangeChanged( const QCPRange&, const QCPRange& ) ), this, SLOT( rangeChanged( const QCPRange&, const QCPRange& ) ) );
-
 #else
 	chart = new QtCharts::QChart();
 	chart->setBackgroundRoundness( 0 );
@@ -82,12 +95,19 @@ QDataAnalysisView::QDataAnalysisView( QDataAnalysisModel* m, QWidget* parent ) :
 	reset();
 }
 
+int QDataAnalysisView::decimalPoints( double v )
+{
+	if ( v != 0 && xo::less_or_equal( abs( v ), 0.05 ) )
+		return 6;
+	else return 3;
+}
+
 void QDataAnalysisView::refresh( double time, bool refreshAll )
 {
-	if ( itemList->topLevelItemCount() != model->getSeriesCount() )
+	if ( itemList->topLevelItemCount() != model->seriesCount() )
 		return reset();
 
-	if ( model->getSeriesCount() == 0 )
+	if ( model->seriesCount() == 0 )
 		return;
 
 	// update state
@@ -96,20 +116,22 @@ void QDataAnalysisView::refresh( double time, bool refreshAll )
 	// draw stuff if visible
 	if ( isVisible() )
 	{
-		int itemCount = refreshAll ? model->getSeriesCount() : std::min<int>( smallRefreshItemCount, model->getSeriesCount() );
+		int itemCount = refreshAll ? model->seriesCount() : std::min<int>( smallRefreshItemCount, model->seriesCount() );
 		itemList->setUpdatesEnabled( false );
 		for ( size_t i = 0; i < itemCount; ++i )
 		{
-			itemList->topLevelItem( currentUpdateIdx )->setText( 1, QString().sprintf( "%.3f", model->getValue( currentUpdateIdx, time ) ) );
-			++currentUpdateIdx %= model->getSeriesCount();
+			auto y = model->value( currentUpdateIdx, time );
+			itemList->topLevelItem( currentUpdateIdx )->setText( 1, QString().sprintf( "%.*f", decimalPoints( y ), y ) );
+			++currentUpdateIdx %= model->seriesCount();
 		}
 		itemList->setUpdatesEnabled( true );
 
 		// update graph
 		updateIndicator();
 
-#ifdef QTFX_USE_QCUSTOMPLOT
-		customPlot->replot( QCustomPlot::rpQueued );
+#if !QTFX_NO_QCUSTOMPLOT
+		if ( refreshAll )
+			customPlot->replot( QCustomPlot::rpQueued );
 #endif
 	}
 }
@@ -123,7 +145,7 @@ void QDataAnalysisView::itemChanged( QTreeWidgetItem* item, int column )
 void QDataAnalysisView::clearSeries()
 {
 	while ( !series.empty() )
-		removeSeries( series.rbegin()->first );
+		removeSeries( series.rbegin()->channel );
 }
 
 void QDataAnalysisView::mouseEvent( QMouseEvent* event )
@@ -132,18 +154,23 @@ void QDataAnalysisView::mouseEvent( QMouseEvent* event )
 	if ( event->buttons() & Qt::LeftButton )
 	{
 		double x = customPlot->xAxis->pixelToCoord( event->pos().x() );
-		xo::clamp( x, model->getTimeStart(), model->getTimeFinish() );
-		emit timeChanged( x );
+		double t = model->timeValue( model->timeIndex( x ) );
+		emit timeChanged( t );
 	}
 #endif
 }
 
 void QDataAnalysisView::rangeChanged( const QCPRange &newRange, const QCPRange &oldRange )
 {
-	auto newZoom = currentSeriesInterval * customPlot->xAxis->axisRect()->width() / newRange.size();
-	auto oldZoom = currentSeriesInterval * customPlot->xAxis->axisRect()->width() / oldRange.size();
-	if ( ( newZoom > 5 && oldZoom <= 5 ) || ( oldZoom > 5 && newZoom <= 5 ) )
-		refreshSeriesStyle();
+	QCPRange fixedRange = QCPRange( xo::max( newRange.lower, model->timeStart() ), xo::min( newRange.upper, model->timeFinish() ) );
+	if ( fixedRange != newRange )
+	{
+		customPlot->xAxis->blockSignals( true );
+		customPlot->xAxis->setRange( fixedRange );
+		customPlot->xAxis->blockSignals( false );
+	}
+
+	updateSeriesStyle();
 }
 
 void QDataAnalysisView::filterChanged( const QString& filter )
@@ -164,37 +191,22 @@ void QDataAnalysisView::setSelectionState( int state )
 	}
 }
 
-QColor QDataAnalysisView::getStandardColor( int idx, float value )
+QColor QDataAnalysisView::getStandardColor( int idx )
 {
-	static std::array< float, 10 > standard_hue{ 0, 60, 120, 180, 240, 300, 30, 210, 270, 330 };
-	static std::array< float, 10 > standard_val{ 1, 0.75, 0.75, 0.75, 1, 1, 1, 0.75, 1, 1 };
-	float hue = standard_hue[ idx % standard_hue.size() ];
-	float sat = 1.0f / ( 1.0f + idx / standard_hue.size() );
-	float val = standard_val[ idx % standard_hue.size() ];
-	vis::color c = vis::make_from_hsv( hue, sat, val );
-	return QColor( 255 * c.r, 255 * c.g, 255 * c.b );
+	return to_qt( xo::make_unique_color( size_t( idx ) ) );
 }
 
 void QDataAnalysisView::reset()
 {
-	// remove series, keep names
-	std::set< QString > keep_series;
-	for ( size_t i = 0; i < itemList->topLevelItemCount(); ++i )
-	{
-		auto* item = itemList->topLevelItem( i );
-		if ( item->checkState( 0 ) == Qt::Checked )
-			keep_series.insert( item->text( 0 ) );
-	}
-
 	itemList->clear();
 	clearSeries();
 
-	for ( size_t i = 0; i < model->getSeriesCount(); ++i )
+	for ( size_t i = 0; i < model->seriesCount(); ++i )
 	{
-		auto* wdg = new QTreeWidgetItem( itemList, QStringList( model->getLabel( i ) ) );
+		auto* wdg = new QTreeWidgetItem( itemList, QStringList( model->label( i ) ) );
 		wdg->setTextAlignment( 1, Qt::AlignRight );
 		wdg->setFlags( wdg->flags() | Qt::ItemIsUserCheckable );
-		wdg->setCheckState( 0, keep_series.count( model->getLabel( i ) ) > 0 ? Qt::Checked : Qt::Unchecked );
+		wdg->setCheckState( 0, persistentSerieNames.find( model->label( i ) ) != persistentSerieNames.end() ? Qt::Checked : Qt::Unchecked );
 	}
 	itemList->resizeColumnToContents( 0 );
 
@@ -209,7 +221,6 @@ void QDataAnalysisView::updateIndicator()
 #if !defined QTFX_NO_QCUSTOMPLOT
 	customPlotLine->start->setCoords( currentTime, customPlot->yAxis->range().lower );
 	customPlotLine->end->setCoords( currentTime, customPlot->yAxis->range().upper );
-	customPlot->replot();
 #else
 	auto pos = chart->mapToPosition( QPointF( currentTime, 0 ) );
 #endif
@@ -247,28 +258,41 @@ void QDataAnalysisView::updateSelectBox()
 	selectBox->blockSignals( false );
 }
 
-void QDataAnalysisView::refreshSeriesStyle()
+void QDataAnalysisView::updateSeriesStyle()
 {
 	auto zoom = currentSeriesInterval * customPlot->xAxis->axisRect()->width() / customPlot->xAxis->range().size();
-	QCPScatterStyle ss = QCPScatterStyle( zoom > 5 ? QCPScatterStyle::ssDisc : QCPScatterStyle::ssNone, 5 );
+	SeriesStyle newstyle = zoom > 8 ? discStyle : lineStyle;
 
-	int i = 0;
-	for ( auto& s : series )
+	if ( newstyle != seriesStyle )
 	{
-		s.second->setPen( QPen( getStandardColor( i++ ) ) );
-		s.second->setScatterStyle( ss );
-		s.second->setLineStyle( QCPGraph::lsLine );
+		seriesStyle = newstyle;
+		QCPScatterStyle ss = QCPScatterStyle( seriesStyle == discStyle ? QCPScatterStyle::ssDisc : QCPScatterStyle::ssNone, 4 );
+		for ( auto& s : series )
+		{
+			s.graph->setScatterStyle( ss );
+			s.graph->setLineStyle( QCPGraph::lsLine );
+		}
 	}
 }
 
 void QDataAnalysisView::updateSeries( int idx )
 {
 	auto item = itemList->topLevelItem( idx );
-	auto series_it = series.find( idx );
+	auto series_it = xo::find_if( series, [&]( auto& p ) { return idx == p.channel; } );
 	if ( item->checkState( 0 ) == Qt::Checked && series_it == series.end() )
-		addSeries( idx );
+	{
+		if ( series.size() < maxSeriesCount )
+		{
+			addSeries( idx );
+			persistentSerieNames.insert( model->label( idx ) );
+		}
+		else item->setCheckState( 0, Qt::Unchecked );
+	}
 	else if ( series_it != series.end() && item->checkState( 0 ) == Qt::Unchecked )
+	{
 		removeSeries( idx );
+		persistentSerieNames.remove( model->label( idx ) );
+	}
 	updateSelectBox();
 }
 
@@ -276,23 +300,34 @@ void QDataAnalysisView::addSeries( int idx )
 {
 #if !defined QTFX_NO_QCUSTOMPLOT
 	QCPGraph* graph = customPlot->addGraph();
-	graph->setName( model->getLabel( idx ) );
+	QString name = model->label( idx );
+	graph->setName( name );
+
+	xo_assert( !freeColors.empty() );
+
+	graph->setScatterStyle( QCPScatterStyle( seriesStyle == discStyle ? QCPScatterStyle::ssDisc : QCPScatterStyle::ssNone, 4 ) );
+	graph->setPen( QPen( getStandardColor( freeColors.front() ), lineWidth ) );
+
 	auto data = model->getSeries( idx, minSeriesInterval );
 	for ( auto& e : data )
 		graph->addData( e.first, e.second );
-	series[ idx ] = graph;
+
+	series.emplace_back( Series{ idx, freeColors.front(), graph } );
+	freeColors.erase( freeColors.begin() );
+
 	currentSeriesInterval = ( data.back().first - data.front().first ) / data.size();
 
-	refreshSeriesStyle();
+	updateSeriesStyle();
 
 	auto range = customPlot->xAxis->range();
 	customPlot->rescaleAxes();
 	customPlot->xAxis->setRange( range );
 	updateIndicator();
 	customPlot->replot();
+
 #else
 	QtCharts::QLineSeries* ls = new QtCharts::QLineSeries;
-	ls->setName( model->getLabel( idx ) );
+	ls->setName( model->label( idx ) );
 	auto data = model->getSeries( idx, minSeriesInterval );
 	for ( auto& e : data )
 		ls->append( e.first, e.second );
@@ -307,9 +342,12 @@ void QDataAnalysisView::removeSeries( int idx )
 {
 #if !defined QTFX_NO_QCUSTOMPLOT
 	auto range = customPlot->xAxis->range();
-	auto it = series.find( idx );
+	auto it = xo::find_if( series, [&]( auto& p ) { return idx == p.channel; } );
+	auto name = it->graph->name();
 
-	customPlot->removeGraph( it->second );
+	freeColors.insert( it->color );
+
+	customPlot->removeGraph( it->graph );
 	series.erase( it );
 
 	customPlot->rescaleAxes();

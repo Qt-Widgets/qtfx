@@ -4,6 +4,7 @@
 #include <QStringList>
 #include <QStatusBar>
 #include <QSettings>
+#include <QMenu>
 
 class QCompositeMainWindow : public QMainWindow
 {
@@ -16,6 +17,7 @@ public:
 	virtual void openFile( const QString& filename ) { }
 	virtual void saveFile() { }
 	virtual void saveFileAs( const QString& filename ) { }
+	virtual bool tryExit() { return true; }
 
 	QDockWidget* createDockWidget( const QString& title, QWidget* widget, Qt::DockWidgetArea area );
 	int registerDockWidget( QDockWidget* widget, const QString& menu_text );
@@ -42,15 +44,11 @@ protected:
 		return a;
 	}
 
-	virtual bool canClose() { return true; }
 	void setActiveFile( const QString& filename ) { activeFile = filename; }
 
 	QStatusBar* createStatusBar();
-	void createFileMenu( const QString& default_folder, const QString& file_types );
-	QString fileFolder;
-	QString fileTypes;
-	QString activeFile;
 
+	void createFileMenu( const QString& default_folder, const QString& file_types );
 	void createWindowMenu();
 	void createHelpMenu();
 
@@ -67,8 +65,10 @@ protected:
 	bool question( const QString& title, const QString& message );
 	void error( const QString& title, const QString& message );
 
-	QWidget* centralWidget;
 	QMenu* fileMenu;
+	QString fileFolder;
+	QString fileTypes;
+	QString activeFile;
 	QAction* recentFilesMenu;
 	QMenu* windowMenu;
 	QMenu* helpMenu;

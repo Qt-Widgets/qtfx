@@ -1,6 +1,6 @@
 #include "QPropNodeItemModel.h"
-#include "xo\container\prop_node_tools.h"
-#include "xo\system\log.h"
+#include "xo/container/prop_node_tools.h"
+#include "xo/system/log.h"
 
 using xo::prop_node;
 
@@ -67,7 +67,7 @@ QVariant QPropNodeItemModel::data( const QModelIndex &index, int role ) const
 			auto parent = find_parent_node( &props_, pn );
 			return QVariant( parent.second->get_key( parent.first ).c_str() );
 		}
-		else return QVariant( QString( pn->get_value().c_str() ) );
+		else return QVariant( QString( pn->raw_value().c_str() ) );
 	}
 	else return QVariant();
 }

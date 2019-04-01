@@ -1,10 +1,18 @@
 #include "QCodeEditor.h"
-#include "xo/system/system_tools.h"
-#include "xo/system/assert.h"
-#include "xo/string/string_tools.h"
+
 #include <QTextStream>
 #include <QMessageBox>
 #include <QFileDialog>
+#include <QBoxLayout>
+#include <QPainter>
+
+#include "xo/system/system_tools.h"
+#include "xo/system/assert.h"
+#include "xo/string/string_tools.h"
+#include "xo/system/log.h"
+#include "xo/serialization/serialize.h"
+#include "xo/numerical/math.h"
+#include "xo/container/prop_node.h"
 
 QCodeEditor::QCodeEditor( QWidget* parent ) :
 QWidget( parent ),
@@ -37,7 +45,7 @@ QString QCodeEditor::getPlainText() const
 
 void QCodeEditor::open( const QString& filename )
 {
-	QCodeSyntaxHighlighter* xmlSyntaxHighlighter = new QCodeSyntaxHighlighter( textEdit->document(), QCodeSyntaxHighlighter::detectLanguage( filename ) );
+	QCodeHighlighter* xmlSyntaxHighlighter = new QCodeHighlighter( textEdit->document(), QCodeHighlighter::detectLanguage( filename ) );
 
 	QFile f( filename );
 	if ( f.open( QFile::ReadOnly | QFile::Text ) )
@@ -82,11 +90,12 @@ void QCodeEditor::saveAs( const QString& fn )
 	{
 		std::stringstream stri( textEdit->toPlainText().toStdString() );
 		xo::prop_node pn;
-		stri >> xo::prop_node_deserializer( getFileFormat( fileName ), pn );
-		std::stringstream stro;
-		stro << xo::prop_node_serializer( getFileFormat( fn ), pn );
+		stri >> *xo::make_serializer( getFileFormat( fileName ), pn );
 
-		QCodeSyntaxHighlighter* xmlSyntaxHighlighter = new QCodeSyntaxHighlighter( textEdit->document(), QCodeSyntaxHighlighter::detectLanguage( fn ) );
+		std::stringstream stro;
+		stro << *xo::make_serializer( getFileFormat( fn ), pn );
+
+		QCodeHighlighter* xmlSyntaxHighlighter = new QCodeHighlighter( textEdit->document(), QCodeHighlighter::detectLanguage( fn ) );
 		textEdit->setPlainText( QString( stro.str().c_str() ) );
 	}
 
@@ -108,146 +117,9 @@ void QCodeEditor::textEditChanged()
 	}
 }
 
-xo::file_format QCodeEditor::getFileFormat( const QString& filename ) const
+std::string QCodeEditor::getFileFormat( const QString& filename ) const
 {
-	return xo::detect_file_format( xo::path( filename.toStdString() ) );
-}
-
-//
-// BasicXMLSyntaxHighlighter
-//
-
-QCodeSyntaxHighlighter::QCodeSyntaxHighlighter( QObject* parent, Language l ) : QSyntaxHighlighter( parent )
-{
-	setLanguage( l );
-}
-
-QCodeSyntaxHighlighter::QCodeSyntaxHighlighter( QTextDocument* parent, Language l ) : QSyntaxHighlighter( parent )
-{
-	setLanguage( l );
-}
-
-void QCodeSyntaxHighlighter::highlightBlock( const QString &text )
-{
-	if ( language == XML )
-	{
-		// Special treatment for xml element regex as we use captured text to emulate lookbehind
-		int xmlElementIndex = m_xmlElementRegex.indexIn( text );
-		while ( xmlElementIndex >= 0 )
-		{
-			int matchedPos = m_xmlElementRegex.pos( 1 );
-			int matchedLength = m_xmlElementRegex.cap( 1 ).length();
-			setFormat( matchedPos, matchedLength, m_ElementFormat );
-			xmlElementIndex = m_xmlElementRegex.indexIn( text, matchedPos + matchedLength );
-		}
-		highlightByRegex( m_NumberFormat, m_NumberRegex, text );
-		highlightByRegex( m_AttributeFormat, m_xmlAttributeRegex, text );
-	}
-	else
-	{
-		highlightByRegex( m_NumberFormat, m_NumberRegex, text );
-		highlightByRegex( m_AttributeFormat, m_xmlAttributeRegex, text );
-		highlightByRegex( m_ElementFormat, m_xmlElementRegex, text );
-	}
-
-	// Highlight xml keywords *after* xml elements to fix any occasional / captured into the enclosing element
-	for ( auto& regex : m_xmlKeywordRegexes )
-		highlightByRegex( m_KeywordFormat, regex, text );
-
-	highlightByRegex( m_ValueFormat, m_xmlValueRegex, text );
-	highlightByRegex( m_SpecialFormat, m_SpecialRegex, text );
-
-	if ( language == ZML )
-	{
-		int i = m_xmlCommentRegex.indexIn( text );
-		while  ( i >= 0 )
-		{
-			int quotes_before = 0;
-			for ( int x = 0; x <= i; ++x )
-				quotes_before += int( text[ x ] == '\"' );
-			if ( quotes_before % 2 == 0 )
-			{
-				setFormat( i, m_xmlCommentRegex.matchedLength(), m_CommentFormat );
-				break;
-			}
-			else i = m_xmlCommentRegex.indexIn( text, i + 1 );
-		}
-	}
-	else 
-	{
-		highlightByRegex( m_CommentFormat, m_xmlCommentRegex, text );
-	}
-}
-
-void QCodeSyntaxHighlighter::highlightByRegex( const QTextCharFormat & format, const QRegExp & regex, const QString & text )
-{
-	int index = regex.indexIn( text );
-	while ( index >= 0 )
-	{
-		int matchedLength = regex.matchedLength();
-		setFormat( index, matchedLength, format );
-		index = regex.indexIn( text, index + matchedLength );
-	}
-}
-
-void QCodeSyntaxHighlighter::setRegexes()
-{
-	switch ( language )
-	{
-	case XML:
-		m_xmlElementRegex.setPattern( "<[\\s]*[/]?[\\s]*([^\\n]\\w*)(?=[\\s/>])" );
-		m_xmlAttributeRegex.setPattern( "\\w+(?=\\=)" );
-		m_xmlValueRegex.setPattern( "\"[^\\n\"]+\"(?=[\\s/>])" );
-		m_xmlCommentRegex.setPattern( "<!--[^\\n]*-->" );
-		m_SpecialRegex.setPattern( "/.^/" );
-		m_xmlKeywordRegexes = QList<QRegExp>() << QRegExp( "<\\?" ) << QRegExp( "/>" ) << QRegExp( ">" ) << QRegExp( "<" ) << QRegExp( "</" ) << QRegExp( "\\?>" );
-		break;
-	case ZML:
-		m_xmlElementRegex.setPattern( "\\w+\\s*\\=\\s*\\{" );
-		m_xmlAttributeRegex.setPattern( "\\w+\\s*(\\=)" );
-		m_xmlValueRegex.setPattern( "\"[^\\n\"]*\"" );
-		m_xmlCommentRegex.setPattern( "(#\\s|;)[^\\n]*" );
-		m_SpecialRegex.setPattern( "#\\w+" );
-		m_xmlKeywordRegexes = QList<QRegExp>() << QRegExp( "\\{" ) << QRegExp( "\\}" ) << QRegExp( "\\[" ) << QRegExp( "\\]" ) << QRegExp( "\\=" );
-		break;
-	default:
-		xo_error( "Unsupported language" );
-	}
-
-	m_NumberRegex.setPattern( "\\b([-+]?[\\.\\d]+)" );
-}
-
-void QCodeSyntaxHighlighter::setFormats()
-{
-	m_KeywordFormat.setForeground( Qt::darkGray );
-	m_ElementFormat.setForeground( Qt::darkBlue );
-	m_ElementFormat.setFontWeight( QFont::Bold );
-	m_AttributeFormat.setForeground( Qt::darkBlue );
-	//m_AttributeFormat.setFontWeight( QFont::Bold );
-	m_ValueFormat.setForeground( Qt::darkRed );
-	m_CommentFormat.setForeground( Qt::darkGreen );
-	m_CommentFormat.setFontItalic( true );
-	m_NumberFormat.setForeground( Qt::darkMagenta );
-	m_SpecialFormat.setForeground( Qt::blue );
-	m_SpecialFormat.setFontItalic( true );
-	m_SpecialFormat.setFontWeight( QFont::Bold );
-}
-
-void QCodeSyntaxHighlighter::setLanguage( Language l )
-{
-	language = l;
-	setRegexes();
-	setFormats();
-}
-
-QCodeSyntaxHighlighter::Language QCodeSyntaxHighlighter::detectLanguage( const QString& filename )
-{
-	auto ext = xo::path( filename.toStdString() ).extension();
-	if ( ext == "xml" )
-		return XML;
-	else if ( ext == "zml" )
-		return ZML;
-	else return ZML;
+	return xo::path( filename.toStdString() ).extension().string();
 }
 
 //
@@ -256,6 +128,7 @@ QCodeSyntaxHighlighter::Language QCodeSyntaxHighlighter::detectLanguage( const Q
 
 QCodeTextEdit::QCodeTextEdit( QWidget* parent ) : QPlainTextEdit( parent )
 {
+	setFrameStyle( QFrame::NoFrame );
 	lineNumberArea = new LineNumberArea( this );
 
 	connect( this, SIGNAL( blockCountChanged( int ) ), this, SLOT( updateLineNumberAreaWidth( int ) ) );
@@ -267,7 +140,8 @@ QCodeTextEdit::QCodeTextEdit( QWidget* parent ) : QPlainTextEdit( parent )
 void QCodeTextEdit::lineNumberAreaPaintEvent( QPaintEvent *event )
 {
 	QPainter painter( lineNumberArea );
-	painter.fillRect( event->rect(), Qt::lightGray );
+	QColor c = palette().color( QWidget::backgroundRole() );
+	painter.fillRect( event->rect(), c );
 
 	QTextBlock block = firstVisibleBlock();
 	int blockNumber = block.blockNumber();
@@ -277,7 +151,7 @@ void QCodeTextEdit::lineNumberAreaPaintEvent( QPaintEvent *event )
 	while ( block.isValid() && top <= event->rect().bottom() ) {
 		if ( block.isVisible() && bottom >= event->rect().top() ) {
 			QString number = QString::number( blockNumber + 1 );
-			painter.setPen( Qt::black );
+			painter.setPen( Qt::gray );
 			painter.drawText( 0, top, lineNumberArea->width() - 2, fontMetrics().height(),
 				Qt::AlignRight, number );
 		}
@@ -303,6 +177,43 @@ int QCodeTextEdit::lineNumberAreaWidth()
 	return space;
 }
 
+void QCodeTextEdit::formatDocument()
+{
+	auto cursor = textCursor();
+	cursor.movePosition( QTextCursor::Start );
+
+	auto indents = 0;
+	while ( !cursor.atEnd() )
+	{
+		QString line = cursor.block().text();
+
+		// count current amount of tabs
+		auto tab_count = 0;
+		while ( tab_count < line.size() && line[ tab_count ] == '\t' )
+			++tab_count;
+
+		auto leading_whitespace = tab_count;
+		while ( leading_whitespace < line.size() && line[ leading_whitespace ].isSpace() )
+			++leading_whitespace;
+
+		QChar first_char = tab_count < line.size() ? line[ tab_count ] : QChar();
+		auto desired_tabs = xo::max( 0, indents - int( first_char == '}' || first_char == ']' ) );
+
+		if ( leading_whitespace != desired_tabs )
+		{
+			cursor.movePosition( QTextCursor::Right, QTextCursor::KeepAnchor, leading_whitespace );
+			cursor.removeSelectedText();
+			cursor.insertText( QString().fill( '\t', desired_tabs ) );
+		}
+
+		// update indents
+		indents += line.count( '{' ) + line.count( '[' ) - line.count( '}' ) - line.count( ']' );
+
+		if ( !cursor.movePosition( QTextCursor::NextBlock ) )
+			break; // prevent infinite loop if this fails
+	}
+}
+
 void QCodeTextEdit::updateLineNumberAreaWidth( int newBlockCount )
 {
 	setViewportMargins( lineNumberAreaWidth(), 0, 0, 0 );
@@ -321,21 +232,21 @@ void QCodeTextEdit::updateLineNumberArea( const QRect& rect, int dy )
 
 void QCodeTextEdit::resizeEvent( QResizeEvent *event )
 {
-	QPlainTextEdit::resizeEvent( event );
 	QRect cr = contentsRect();
-	lineNumberArea->setGeometry( QRect( cr.left(), cr.top(), lineNumberAreaWidth(), cr.height() ) );
+	if ( cr != previousRect ) // this is a hack to prevent a Qt bug causing infinite QResizeEvents
+	{
+		previousRect = cr;
+		QPlainTextEdit::resizeEvent( event );
+		lineNumberArea->setGeometry( QRect( cr.left(), cr.top(), lineNumberAreaWidth(), cr.height() ) );
+	}
 }
 
 void QCodeTextEdit::keyPressEvent( QKeyEvent *e )
 {
-	if ( e->key() == Qt::Key_Return || e->key() == Qt::Key_Enter )
+	if ( e->key() == Qt::Key_Return || e->key() == Qt::Key_Enter || e->key() == '{' || e->key() == '}' )
 	{
-		auto line = textCursor().block().text().toStdString();
-		int tabs = 0;
-		while ( tabs < line.size() && line[ tabs ] == '\t' )
-			++tabs;
 		QPlainTextEdit::keyPressEvent( e );
-		QPlainTextEdit::insertPlainText( QString( tabs, '\t' ) );
+		formatDocument();
 	}
 	else QPlainTextEdit::keyPressEvent( e );
 }

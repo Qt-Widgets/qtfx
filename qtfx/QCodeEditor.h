@@ -2,8 +2,10 @@
 
 #include <QWidget>
 #include <QFileInfo>
-#include <QSyntaxHighlighter>
+
+#include "QCodeHighlighter.h"
 #include <QPlainTextEdit>
+
 #include "xo/serialization/serialize.h"
 
 class QCodeEditor : public QWidget
@@ -13,8 +15,11 @@ class QCodeEditor : public QWidget
 public:
 	QCodeEditor( QWidget* parent = 0 );
 	virtual ~QCodeEditor();
+
 	bool hasTextChanged() { return textChangedFlag; }
 	QString getPlainText() const;
+	bool isEmpty() const { return fileName.isEmpty(); }
+	QString getTitle();
 
 public slots:
 	void open( const QString& filename );
@@ -22,10 +27,10 @@ public slots:
 	void save();
 	void saveAs( const QString& filename );
 
-	QString getTitle();
 	void textEditChanged();
 
 signals:
+	// TODO: use isModified / setModified! from QTextEdit
 	void textChanged();
 
 public:
@@ -35,64 +40,10 @@ public:
 	bool textChangedFlag = false;
 
 private:
-	xo::file_format getFileFormat( const QString& filename ) const;
+	std::string getFileFormat( const QString& filename ) const;
 	class QCodeSyntaxHighlighter* xmlSyntaxHighlighter;
     class QCodeTextEdit *textEdit;
 };
-
-//
-// BasicXMLSyntaxHighlighter
-//
-
-class QCodeSyntaxHighlighter : public QSyntaxHighlighter
-{
-	Q_OBJECT
-public:
-	enum Language { XML, ZML };
-
-	QCodeSyntaxHighlighter( QObject* parent, Language f );
-	QCodeSyntaxHighlighter( QTextDocument* parent, Language f );
-
-	void setLanguage( Language l );
-	static Language detectLanguage( const QString& filename );
-
-	virtual ~QCodeSyntaxHighlighter() {}
-
-protected:
-	virtual void highlightBlock( const QString& text );
-
-private:
-	void highlightByRegex( const QTextCharFormat& format, const QRegExp& regex, const QString& text );
-	void setRegexes();
-	void setFormats();
-
-private:
-	Language language;
-	struct Rule {
-		QRegExp regExp;
-		QTextCharFormat format;
-	};
-
-	QTextCharFormat     m_KeywordFormat;
-	QTextCharFormat     m_ElementFormat;
-	QTextCharFormat     m_AttributeFormat;
-	QTextCharFormat     m_ValueFormat;
-	QTextCharFormat     m_CommentFormat;
-	QTextCharFormat     m_NumberFormat;
-	QTextCharFormat     m_SpecialFormat;
-
-	QList<QRegExp>      m_xmlKeywordRegexes;
-	QRegExp             m_xmlElementRegex;
-	QRegExp             m_xmlAttributeRegex;
-	QRegExp             m_xmlValueRegex;
-	QRegExp             m_xmlCommentRegex;
-	QRegExp             m_NumberRegex;
-	QRegExp             m_SpecialRegex;
-};
-
-//
-// QCodeTextEdit
-//
 
 class QCodeTextEdit : public QPlainTextEdit
 {
@@ -117,6 +68,7 @@ public:
 public slots:
 	void updateLineNumberAreaWidth( int newBlockCount );
 	void updateLineNumberArea( const QRect& rect, int dy );
+	void formatDocument();
 
 protected:
 	virtual void resizeEvent( QResizeEvent *event ) Q_DECL_OVERRIDE;
@@ -124,4 +76,5 @@ protected:
 
 private:
 	QWidget *lineNumberArea;
+	QRect previousRect;
 };

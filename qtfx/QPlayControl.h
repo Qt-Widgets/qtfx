@@ -7,10 +7,10 @@
 #include <QTimer>
 #include "xo/time/timer.h"
 #include "xo/numerical/delta.h"
-#include "xo/utility/types.h"
+#include "xo/xo_types.h"
 
-class QAbstractButton;
 class QAbstractSlider;
+class QToolButton;
 class QComboBox;
 
 class QPlayControl : public QWidget
@@ -19,7 +19,10 @@ class QPlayControl : public QWidget
 
 public:
 	QPlayControl( QWidget *parent = 0 );
+
+
 	double slowMotionFactor() const { return slomoFactor; }
+	void setSlomoRange( int max_power_of_2, int min_power_of_2 );
 
 	void setRange( double min, double max );
 	void setTime( double time );
@@ -61,14 +64,14 @@ signals:
 private slots:
 	void updateSlider( int );
 	void updateSlowMotion( int );
-	void timeout();
+	void updateTime();
 
 private:
-	QAbstractButton *playButton;
-	QAbstractButton *stopButton;
-	QAbstractButton *nextButton;
-	QAbstractButton *previousButton;
-	QAbstractButton *loopButton;
+	QToolButton *playButton;
+	QToolButton *resetButton;
+	QToolButton *nextButton;
+	QToolButton *previousButton;
+	QToolButton *loopButton;
 	QComboBox *slomoBox;
 	QSlider *slider;
 	QLCDNumber* lcdNumber;
@@ -83,5 +86,5 @@ private:
 
 	QTimer qtimer;
 	xo::timer timer;
-	xo::delta< xo::seconds_t > timer_delta;
+	xo::delta< double > timer_delta;
 };

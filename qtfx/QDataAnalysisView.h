@@ -20,6 +20,7 @@
 #include "QGroup.h"
 #include "QCheckBox"
 #include "QToolButton"
+#include "xo/container/sorted_vector.h"
 
 class QDataAnalysisView : public QWidget
 {
@@ -31,6 +32,7 @@ public:
 	void refresh( double time, bool refreshAll = true );
 	void reset();
 
+	void setLineWidth( float f ) { lineWidth = f; }
 	void setMinSeriesInterval( float f ) { minSeriesInterval = f; }
 
 public slots:
@@ -49,16 +51,21 @@ signals:
 	void timeChanged( double );
 
 private:
-	QColor getStandardColor( int idx, float brightness = 0.75f );
+	QColor getStandardColor( int idx );
 	void addSeries( int idx );
 	void removeSeries( int idx );
 	void updateIndicator();
 	void updateFilter();
 	void updateSelectBox();
+	int decimalPoints( double v );
 
+	enum SeriesStyle { noStyle, lineStyle, discStyle };
+	SeriesStyle seriesStyle = noStyle;
+	size_t maxSeriesCount = 20;
 	int smallRefreshItemCount = 100;
 	float minSeriesInterval = 0.01f;
 	float currentSeriesInterval = 0;
+	float lineWidth = 1.5f;
 	int currentUpdateIdx;
 	double currentTime;
 	QCheckBox* selectBox;
@@ -71,11 +78,20 @@ private:
 #if !defined QTFX_NO_QCUSTOMPLOT
 	QCustomPlot* customPlot;
 	QCPItemLine* customPlotLine;
-	xo::flat_map< int, QCPGraph* > series;
+	xo::sorted_vector< int > freeColors;
+
+	struct Series {
+		int channel;
+		int color;
+		QCPGraph* graph;
+	};
+	std::vector< Series > series;
+
+	xo::sorted_vector< QString > persistentSerieNames;
 #else
 	QtCharts::QChart* chart;
 	xo::flat_map< int, QtCharts::QLineSeries* > series;
 	QtCharts::QChartView* chartView;
 #endif
-	void refreshSeriesStyle();
+	void updateSeriesStyle();
 };

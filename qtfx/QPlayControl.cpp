@@ -1,9 +1,13 @@
 #include "QPlayControl.h"
 
-#include <QToolButton>
-#include <QWidget>
-#include <QComboBox>
+#include <QtWidgets/QToolButton>
+#include <QtWidgets/QWidget>
+#include <QtWidgets/QComboBox>
+#include <QtWidgets/QBoxLayout>
+
 #include "xo/system/log.h"
+
+#include <math.h>
 
 QPlayControl::QPlayControl( QWidget *parent ) :
 QWidget( parent ),
@@ -19,18 +23,20 @@ decimals_( 2 )
 {
 	playButton = new QToolButton( this );
 	playButton->setIcon( style()->standardIcon( QStyle::SP_MediaPlay ) );
-	connect( playButton, SIGNAL( clicked() ), this, SLOT( play() ) );
+	connect( playButton, SIGNAL( clicked() ), this, SLOT( togglePlay() ) );
 
-	stopButton = new QToolButton( this );
-	stopButton->setIcon( style()->standardIcon( QStyle::SP_MediaStop ) );
-	connect( stopButton, SIGNAL( clicked() ), this, SLOT( stopReset() ) );
+	resetButton = new QToolButton( this );
+	resetButton->setIcon( style()->standardIcon( QStyle::SP_MediaSkipBackward ) );
+	connect( resetButton, SIGNAL( clicked() ), this, SLOT( reset() ) );
 
 	nextButton = new QToolButton( this );
-	nextButton->setIcon( style()->standardIcon( QStyle::SP_MediaSkipForward ) );
+	nextButton->setIcon( style()->standardIcon( QStyle::SP_MediaSeekForward) );
+	nextButton->setStyleSheet( "border: 0px" );
 	connect( nextButton, SIGNAL( clicked() ), this, SLOT( stepForward() ) );
 
 	previousButton = new QToolButton( this );
-	previousButton->setIcon( style()->standardIcon( QStyle::SP_MediaSkipBackward ) );
+	previousButton->setIcon( style()->standardIcon( QStyle::SP_MediaSeekBackward ) );
+	previousButton->setStyleSheet( "border: 0px" );
 	connect( previousButton, SIGNAL( clicked() ), this, SLOT( stepBack() ) );
 
 	loopButton = new QToolButton( this );
@@ -40,7 +46,7 @@ decimals_( 2 )
 	lcdNumber = new QLCDNumber( this );
 	lcdNumber->setDigitCount( 6 );
 	lcdNumber->setSmallDecimalPoint( true );
-	lcdNumber->setFrameStyle( QFrame::Box );
+	lcdNumber->setFrameStyle( QFrame::NoFrame );
 	lcdNumber->setSegmentStyle( QLCDNumber::Flat );
 	lcdNumber->display( "0.000" );
 
@@ -51,28 +57,34 @@ decimals_( 2 )
 	connect( slider, SIGNAL( sliderReleased() ), this, SIGNAL( sliderReleased() ) );
 
 	slomoBox = new QComboBox( this );
-	for ( int slomo = 2; slomo >= -5; --slomo )
-	{
-		QString label = slomo >= 0 ? QString().sprintf( "%d x", (int)pow( 2, slomo ) ) : QString().sprintf( "1/%d x", (int)pow( 2, -slomo ) );
-		slomoBox->addItem( label, QVariant( pow( 2, slomo ) ) );
-	}
-	slomoBox->setCurrentIndex( 2 );
+	setSlomoRange( 2, -5 );
 	connect( slomoBox, SIGNAL( currentIndexChanged( int ) ), this, SLOT( updateSlowMotion( int ) ) );
 
 	QBoxLayout *lo = new QHBoxLayout;
 	lo->setMargin( 0 );
 	lo->setSpacing( 2 );
-	lo->addWidget( previousButton );
 	lo->addWidget( playButton );
-	lo->addWidget( stopButton );
-	lo->addWidget( nextButton );
+	lo->addWidget( resetButton );
 	lo->addWidget( lcdNumber );
+	lo->addWidget( previousButton );
 	lo->addWidget( slider );
+	lo->addWidget( nextButton );
 	lo->addWidget( loopButton );
 	lo->addWidget( slomoBox );
 	setLayout( lo );
 
-	connect( &qtimer, SIGNAL( timeout() ), this, SLOT( timeout() ) );
+	connect( &qtimer, &QTimer::timeout, this, &QPlayControl::updateTime );
+}
+
+void QPlayControl::setSlomoRange( int max_power_of_2, int min_power_of_2 )
+{
+	slomoBox->clear();
+	for ( int slomo = max_power_of_2; slomo >= min_power_of_2; --slomo )
+	{
+		QString label = slomo >= 0 ? QString().sprintf( "%d x", (int)pow( 2, slomo ) ) : QString().sprintf( "1/%d x", (int)pow( 2, -slomo ) );
+		slomoBox->addItem( label, QVariant( pow( 2, slomo ) ) );
+	}
+	slomoBox->setCurrentIndex( max_power_of_2 );
 }
 
 void QPlayControl::setRange( double min, double max )
@@ -148,14 +160,20 @@ void QPlayControl::play()
 		qtimer.start( 10 );
 		timer.reset();
 		timer_delta( 0 );
+		playButton->setIcon( style()->standardIcon( QStyle::SP_MediaPause ) );
 		emit playTriggered();
 	}
 }
 
 void QPlayControl::stop()
 {
-	qtimer.stop();
-	emit stopTriggered();
+	if ( isPlaying() )
+	{
+		qtimer.stop();
+		updateTime();
+		playButton->setIcon( style()->standardIcon( QStyle::SP_MediaPlay ) );
+		emit stopTriggered();
+	}
 }
 
 void QPlayControl::stopReset()
@@ -229,7 +247,7 @@ void QPlayControl::updateSlider( int value )
 	emit sliderChanged( value );
 }
 
-void QPlayControl::timeout()
+void QPlayControl::updateTime()
 {
-	setTime( currentTime + slomoFactor * timer_delta( timer.seconds() ) );
+	setTime( currentTime + slomoFactor * timer_delta( timer().seconds<double>() ) );
 }
